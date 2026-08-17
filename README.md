@@ -10,6 +10,10 @@ Even using the wrapper API, you can still access the native Open Mobile Maps vie
 
 https://mapconductor.com/setup/
 
+### API key
+
+**No API key.** Open Mobile Maps renders from the style you configure.
+
 ### Clone maps-core locally
 
 Open Mobile Maps requires a local `maps-core` checkout with its submodules:
