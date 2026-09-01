@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import QuartzCore
 import UIKit
 
@@ -515,19 +515,21 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// マーカータイルのラスターレイヤ id の前置き。外すときの目印。
     static let markerTileIdPrefix = "marker-tile-"
 
-    /// 方位の符号。**SDK は MapConductor と逆回りである。**
+    /// 方位の符号。**SDK の `setRotation` は MapConductor の bearing と同じ向き**
+    /// （どちらも「地図を時計回りに回す量」）なので、変換は恒等になる。
     ///
-    /// MapConductor の bearing は Google 準拠で「カメラが向いている方位を北から時計回りに測る」。
-    /// SDK の `setRotation` は地図を反時計回りに回す量なので、符号を反転する。
-    /// 反転を忘れると bearing 270 の地図が 90 として描かれ、**ちょうど 180 度ずれる**
-    /// （単独で見ると「回っている」ので正しく見えてしまう。android では Tilt ページを
-    /// MapLibre と並べて気づいた）。
-    static func nativeRotationFromBearing(_ bearing: Double) -> Float { Float(-bearing) }
+    /// ここは机上ではなく端末で決めた値である。基準は「MapLibre と並べて同じ向きに
+    /// 描かれること」で、MapLibre 側が heading 系（bearing の符号反転）に変わったのに
+    /// 合わせてこちらも反転させてある（android-for-openmobilemaps と同じ）。
+    /// **符号を触ったら必ず Tilt ページを MapLibre と並べて確認すること。**
+    /// 単独で見ると「回っている」ので正しく見えてしまう。
+    static func nativeRotationFromBearing(_ bearing: Double) -> Float {
+        Float(CameraBearing.toNativeRotation(bearing))
+    }
 
     /// SDK の回転角 → MapConductor の bearing（0 以上 360 未満）。
     static func bearingFromNativeRotation(_ rotation: Float) -> Double {
-        let bearing = Double(-rotation).truncatingRemainder(dividingBy: 360.0)
-        return bearing < 0 ? bearing + 360.0 : bearing
+        CameraBearing.bearingFromNativeRotation(Double(rotation))
     }
 }
 
