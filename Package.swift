@@ -27,7 +27,7 @@ private func siblingPackageExists(_ relativePath: String) -> Bool {
 // 無ければ公開リポジトリを見る。
 let coreDependency: Package.Dependency = siblingPackageExists("../ios-sdk-core")
     ? .package(path: "../ios-sdk-core")
-    : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.1.4")
+    : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.3.1")
 
 // android-for-openmobilemaps が使う mapscore と**同じ 4.0.0**。プラットフォーム間で
 // メジャーがずれると、ズームの体系やレイヤーの挙動が食い違って比較にならなくなる。
