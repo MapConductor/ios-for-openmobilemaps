@@ -24,6 +24,8 @@ public struct OpenMobileMapsMapView: View {
 
     private let handlers: MapViewHandlers<OpenMobileMapsViewState>
     private let cameraRestriction: CameraRestriction?
+    private let style: MapViewStyle?
+    private let onStyleDiagnostics: (([String]) -> Void)?
     private let content: () -> MapViewContent
 
     public init(
@@ -36,6 +38,12 @@ public struct OpenMobileMapsMapView: View {
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
         sdkInitialize: (() -> Void)? = nil,
+        /// How the map looks, when the app states it rather than naming a
+        /// design. `MapConductorVectorStyle` builds one; what happens
+        /// underneath depends on this backend and the app does not have to
+        /// know.
+        style: MapViewStyle? = nil,
+        onStyleDiagnostics: (([String]) -> Void)? = nil,
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
@@ -49,6 +57,8 @@ public struct OpenMobileMapsMapView: View {
             sdkInitialize: sdkInitialize
         )
         self.cameraRestriction = cameraRestriction
+        self.style = style
+        self.onStyleDiagnostics = onStyleDiagnostics
         self.content = content
     }
 
@@ -70,6 +80,8 @@ public struct OpenMobileMapsMapView: View {
                 state: state,
                 cameraRestriction: cameraRestriction,
                 handlers: handlers,
+                style: style,
+                onStyleDiagnostics: onStyleDiagnostics,
                 content: mapContent
             )
         }
@@ -80,6 +92,8 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: OpenMobileMapsViewState
     let cameraRestriction: CameraRestriction?
     let handlers: MapViewHandlers<OpenMobileMapsViewState>
+    let style: MapViewStyle?
+    let onStyleDiagnostics: (([String]) -> Void)?
     let content: MapViewContent
 
     func makeCoordinator() -> Coordinator {
@@ -113,6 +127,9 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: OpenMobileMapsMapSurface, context: Context) {
+        // Every evaluation of the app's `body` lands here; most calls do
+        // nothing. See `MapViewStyleHost.apply`.
+        context.coordinator.applyStyle(style, onDiagnostics: onStyleDiagnostics)
         _ = uiView
         // 地図デザインとジェスチャはここで反映する。`setMapDesignType` は同じデザインなら
         // 何もしないので、毎フレーム呼んでもタイルレイヤは張り替わらない。
@@ -123,6 +140,7 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
     }
 
     static func dismantleUIView(_: OpenMobileMapsMapSurface, coordinator: Coordinator) {
+        coordinator.disposeStyle()
         coordinator.unbind()
     }
 
