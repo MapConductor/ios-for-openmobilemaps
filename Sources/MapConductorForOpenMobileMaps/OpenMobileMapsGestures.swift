@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 /// 実装点 E / F。SDK のタッチをコアの受け口へつなぐ。
@@ -214,26 +214,15 @@ extension OpenMobileMapsMapViewController {
         emitMapClick(position)
     }
 
-    /// strategy 側マーカーの当たり判定と配送。重なっているときはアンカーが近いほうを選ぶ。
+    /// strategy 側マーカーの当たり判定と配送。選び方はコアの ``MarkerHitTest/pick`` と同じ。
     private func handleStrategyTap(at point: CGPoint) -> Bool {
         guard let strategyController = strategyManager.controller else { return false }
-        let defaultIcon = DefaultMarkerIcon()
-        var bestState: MarkerState?
-        var bestDistance = CGFloat.infinity
-        for entity in strategyController.markerManager.allEntities() where entity.state.clickable {
-            guard let screen = ommHolder.toScreenOffset(position: entity.state.position) else { continue }
-            guard MarkerHitTest.hitsIcon(
-                touchScreen: point,
-                markerScreen: screen,
-                state: entity.state,
-                defaultIcon: defaultIcon
-            ) else { continue }
-            let distance = hypot(point.x - screen.x, point.y - screen.y)
-            if distance < bestDistance {
-                bestDistance = distance
-                bestState = entity.state
-            }
-        }
+        let bestState = MarkerHitTest.pick(
+            touchScreen: point,
+            candidates: strategyController.markerManager.allEntities().map(\.state).filter(\.clickable),
+            state: { $0 },
+            project: { ommHolder.toScreenOffset(position: $0) }
+        )
         guard let state = bestState else { return false }
         strategyController.dispatchClick(state)
         return true

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 /*
@@ -560,29 +560,20 @@ final class OpenMobileMapsMarkerController:
         markerManager.getEntity(id)?.state
     }
 
-    /// 画面座標にあるマーカー。重なっているときはアンカーが近いほうを選ぶ。
+    /// 画面座標にあるマーカー。選び方はコアの ``MarkerHitTest/pick`` と同じで、指の下にアイコン
+    /// （ラベル込み）が描かれているマーカーを、アンカーの近い別のマーカーより優先する。
     ///
     /// 受け取るのは**入れ物（`OpenMobileMapsMapSurface`）の座標**。ホルダーの
     /// `toScreenOffset` も入れ物の座標へ畳んで返すので、両者は同じ系で比べられる。
     func markerId(atScreenPoint point: CGPoint, where isEligible: (MarkerState) -> Bool) -> String? {
         guard let holder else { return nil }
-        var bestId: String?
-        var bestDistance = CGFloat.infinity
-        for entity in markerManager.allEntities() where isEligible(entity.state) {
-            guard let screen = holder.toScreenOffset(position: entity.state.position) else { continue }
-            guard MarkerHitTest.hitsIcon(
-                touchScreen: point,
-                markerScreen: screen,
-                state: entity.state,
-                defaultIcon: defaultIcon
-            ) else { continue }
-            let distance = hypot(point.x - screen.x, point.y - screen.y)
-            if distance < bestDistance {
-                bestDistance = distance
-                bestId = entity.state.id
-            }
-        }
-        return bestId
+        return MarkerHitTest.pick(
+            touchScreen: point,
+            candidates: markerManager.allEntities().map(\.state).filter(isEligible),
+            state: { $0 },
+            project: { holder.toScreenOffset(position: $0) },
+            defaultIcon: defaultIcon
+        )?.id
     }
 
     func unbind() {
