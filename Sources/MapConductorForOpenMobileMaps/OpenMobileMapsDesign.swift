@@ -58,6 +58,9 @@ public struct OpenMobileMapsDesign: OpenMobileMapsMapDesignTypeProtocol, Equatab
     /// **タイルの利用条件を満たさない状態**で表示される。
     private static let osmAttribution = "© OpenStreetMap contributors"
 
+    /// No basemap: no tile layer at all, so only what the app adds is drawn.
+    public static let none = OpenMobileMapsDesign(id: "none", tileUrlTemplate: "")
+
     public static let openStreetMap = OpenMobileMapsDesign(
         id: "osm",
         tileUrlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",

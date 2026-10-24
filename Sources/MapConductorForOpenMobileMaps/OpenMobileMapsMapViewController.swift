@@ -410,6 +410,11 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     public func setMapDesignType(_ value: any OpenMobileMapsMapDesignTypeProtocol) {
         if currentDesign?.getValue() == value.getValue() { return }
         currentDesign = value
+        // No template, no layer: the design that draws nothing.
+        guard !value.tileUrlTemplate.isEmpty else {
+            layers.setDesignLayer(nil, on: ommHolder.map)
+            return
+        }
         let config = WebMercatorTileLayerConfig(
             layerName: "design-\(value.id)",
             urlTemplate: value.tileUrlTemplate,
