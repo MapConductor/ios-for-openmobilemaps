@@ -450,7 +450,9 @@ final class OpenMobileMapsMarkerController:
         guard let prevEntity = markerManager.getEntity(state.id) else { return }
         if state.fingerPrint() == prevEntity.fingerPrint { return }
 
-        let tilingEnabled = markerManager.allEntities().count >= tilingOptions.minMarkerCount
+        // 件数だけが要る。`allEntities()` は全件の配列を作るので、ラベルの付け替えのように
+        // 数百本が続けて変わると、そのたびに 14.4 万件を写すことになる。
+        let tilingEnabled = markerManager.getMemoryStats().entityCount >= tilingOptions.minMarkerCount
         let wantsTiled = tilingEnabled && !state.draggable && state.getAnimation() == nil
         let wasTiled = tiledMarkerIds.contains(state.id)
 
@@ -469,13 +471,27 @@ final class OpenMobileMapsMarkerController:
                 tiling: true
             ))
             await renderer.onPostProcess()
-            refreshTiles(hasTiledMarkers: true)
+            scheduleTileRefresh()
             return
         }
 
         if wasTiled { tiledMarkerIds.remove(state.id) }
         await super.update(state: state)
-        refreshTiles(hasTiledMarkers: !tiledMarkerIds.isEmpty)
+        scheduleTileRefresh()
+    }
+
+    private var tileRefreshScheduled = false
+
+    /// 1 本ずつの変更からの描き直しは 1 回にまとめる。数百本が続けて変わったとき、
+    /// 1 本ごとにラスター層を差し替えると、そのたびに地図が全タイルを取り直す。
+    private func scheduleTileRefresh() {
+        guard !tileRefreshScheduled else { return }
+        tileRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.tileRefreshScheduled = false
+            self.refreshTiles(hasTiledMarkers: !self.tiledMarkerIds.isEmpty)
+        }
     }
 
     override func clear() async {
@@ -537,7 +553,10 @@ final class OpenMobileMapsMarkerController:
             // 画素数を増やしたぶんアイコンも大きく描く。そうしないと 1/3 の大きさになる。
             iconScaleCallback: { state, zoom in
                 (baseCallback?(state, zoom) ?? 1.0) * contentScale
-            }
+            },
+            // 他のプロバイダと同じく tilingOptions から。渡し忘れると間引きが黙って無効になり、
+            // 密なデータで描画が重くなる。
+            declutterPx: tilingOptions.declutterPx
         )
         tileServer.register(routeId: routeId, provider: created)
         tileRenderer = created

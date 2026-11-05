@@ -1,6 +1,6 @@
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import SwiftUI
 import UIKit
 
@@ -156,6 +156,13 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
         private weak var surface: OpenMobileMapsMapSurface?
         private var controller: OpenMobileMapsMapViewController?
         private var overlayScope: MapOverlayScope?
+        /// 同じマーカー一覧の再送を入口で帰す門番（他プロバイダの `syncMarkers` と同じ）。
+        ///
+        /// SwiftUI はカメラが動くたびに content を送り直してくる。コレクタの `sync` は
+        /// 全件の id を集めて比べ、変更の通知先を全件に張り直すので、14.4 万本の街路樹では
+        /// パン中にこれが何度も挟まって操作が重くなっていた。一覧が同じなら、張ってある
+        /// 通知先もそのまま有効なので、何もしなくてよい。
+        private var markerListIdentity = MarkerListIdentity()
         private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
 
         func bind(state: OpenMobileMapsViewState, surface: OpenMobileMapsMapSurface) {
@@ -280,7 +287,9 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
         func updateContent(_ content: MapViewContent) {
             infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
             controller?.markerController.tilingOptions = content.markerTilingOptions
-            overlayScope?.markerCollector.sync(content.markers.map(\.state))
+            if markerListIdentity.shouldProcess(content.markers) {
+                overlayScope?.markerCollector.sync(content.markers.map(\.state))
+            }
             overlayScope?.polylineCollector.sync(content.polylines.map(\.state))
             overlayScope?.polygonCollector.sync(content.polygons.map(\.state))
             overlayScope?.circleCollector.sync(content.circles.map(\.state))
