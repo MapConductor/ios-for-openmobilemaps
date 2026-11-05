@@ -525,7 +525,7 @@ final class OpenMobileMapsMarkerController:
                     tileSize: tileRenderer.tileSize,
                     cacheKey: String(tileGeneration)
                 ),
-                tileSize: RasterLayerSource.defaultTileSize,
+                tileSize: Self.markerTileSizePt,
                 minZoom: 0,
                 maxZoom: 22,
                 attributionRules: [],
@@ -539,6 +539,13 @@ final class OpenMobileMapsMarkerController:
         rasterLayerCallback?(state)
     }
 
+    /// マーカーのタイル 1 枚の一辺（pt）。ios-for-maplibre と同じ 256。
+    ///
+    /// 以前は ``RasterLayerSource/defaultTileSize``（512）を渡していて、上の注釈にある
+    /// 「割り付けの単位（256）」と食い違っていた。512 だと 1 段浅いタイルを選ぶうえ、
+    /// アイコンの大きさを決める `iconScaleCallback` にも 1 段浅いズームが渡る。
+    private static let markerTileSizePt = 256
+
     private func getOrCreateTileRenderer() -> MarkerTileRenderer<OpenMobileMapsActualMarker> {
         if let tileRenderer { return tileRenderer }
         let routeId = "mapconductor-markers-\(UUID().uuidString)"
@@ -547,7 +554,7 @@ final class OpenMobileMapsMarkerController:
         let baseCallback = tilingOptions.iconScaleCallback
         let created = MarkerTileRenderer<OpenMobileMapsActualMarker>(
             markerManager: markerManager,
-            tileSize: RasterLayerSource.defaultTileSize * max(1, Int(UIScreen.main.scale)),
+            tileSize: Self.markerTileSizePt * max(1, Int(UIScreen.main.scale)),
             cacheSizeBytes: tilingOptions.cacheSize,
             debugTileOverlay: tilingOptions.debugTileOverlay,
             // 画素数を増やしたぶんアイコンも大きく描く。そうしないと 1/3 の大きさになる。
