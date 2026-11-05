@@ -412,7 +412,13 @@ final class OpenMobileMapsRasterLayerOverlayRenderer: RasterLayerOverlayRenderer
             scheme: scheme,
             // ラスターオーバーレイは透過前提なので、粗い親レベルを重ね描きしない
             numDrawPreviousLayers: 0,
-            maskTile: true
+            maskTile: true,
+            // マーカーのタイルは点やラベルの大きさを前提に焼いてあるので、引き伸ばすと
+            // 点もラベルも大きく描かれ、重ならないように置いたラベルが重なる。
+            // 他のプロバイダと同じく、近い方の段を選ばせる。
+            zoomLevelScaleFactor: state.id.hasPrefix(OpenMobileMapsMapViewController.markerTileIdPrefix)
+                ? Float(2.0.squareRoot())
+                : 1.0
         )
         guard let layer = MCTiled2dMapRasterLayerInterface.create(config, loaders: loaders),
               let layerInterface = layer.asLayerInterface()

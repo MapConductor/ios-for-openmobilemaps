@@ -450,7 +450,9 @@ final class OpenMobileMapsMarkerController:
         guard let prevEntity = markerManager.getEntity(state.id) else { return }
         if state.fingerPrint() == prevEntity.fingerPrint { return }
 
-        let tilingEnabled = markerManager.allEntities().count >= tilingOptions.minMarkerCount
+        // 件数だけが要る。`allEntities()` は全件の配列を作るので、ラベルの付け替えのように
+        // 数百本が続けて変わると、そのたびに 14.4 万件を写すことになる。
+        let tilingEnabled = markerManager.getMemoryStats().entityCount >= tilingOptions.minMarkerCount
         let wantsTiled = tilingEnabled && !state.draggable && state.getAnimation() == nil
         let wasTiled = tiledMarkerIds.contains(state.id)
 
@@ -469,13 +471,27 @@ final class OpenMobileMapsMarkerController:
                 tiling: true
             ))
             await renderer.onPostProcess()
-            refreshTiles(hasTiledMarkers: true)
+            scheduleTileRefresh()
             return
         }
 
         if wasTiled { tiledMarkerIds.remove(state.id) }
         await super.update(state: state)
-        refreshTiles(hasTiledMarkers: !tiledMarkerIds.isEmpty)
+        scheduleTileRefresh()
+    }
+
+    private var tileRefreshScheduled = false
+
+    /// 1 本ずつの変更からの描き直しは 1 回にまとめる。数百本が続けて変わったとき、
+    /// 1 本ごとにラスター層を差し替えると、そのたびに地図が全タイルを取り直す。
+    private func scheduleTileRefresh() {
+        guard !tileRefreshScheduled else { return }
+        tileRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.tileRefreshScheduled = false
+            self.refreshTiles(hasTiledMarkers: !self.tiledMarkerIds.isEmpty)
+        }
     }
 
     override func clear() async {
@@ -509,7 +525,7 @@ final class OpenMobileMapsMarkerController:
                     tileSize: tileRenderer.tileSize,
                     cacheKey: String(tileGeneration)
                 ),
-                tileSize: RasterLayerSource.defaultTileSize,
+                tileSize: Self.markerTileSizePt,
                 minZoom: 0,
                 maxZoom: 22,
                 attributionRules: [],
@@ -523,6 +539,13 @@ final class OpenMobileMapsMarkerController:
         rasterLayerCallback?(state)
     }
 
+    /// マーカーのタイル 1 枚の一辺（pt）。ios-for-maplibre と同じ 256。
+    ///
+    /// 以前は ``RasterLayerSource/defaultTileSize``（512）を渡していて、上の注釈にある
+    /// 「割り付けの単位（256）」と食い違っていた。512 だと 1 段浅いタイルを選ぶうえ、
+    /// アイコンの大きさを決める `iconScaleCallback` にも 1 段浅いズームが渡る。
+    private static let markerTileSizePt = 256
+
     private func getOrCreateTileRenderer() -> MarkerTileRenderer<OpenMobileMapsActualMarker> {
         if let tileRenderer { return tileRenderer }
         let routeId = "mapconductor-markers-\(UUID().uuidString)"
@@ -531,13 +554,16 @@ final class OpenMobileMapsMarkerController:
         let baseCallback = tilingOptions.iconScaleCallback
         let created = MarkerTileRenderer<OpenMobileMapsActualMarker>(
             markerManager: markerManager,
-            tileSize: RasterLayerSource.defaultTileSize * max(1, Int(UIScreen.main.scale)),
+            tileSize: Self.markerTileSizePt * max(1, Int(UIScreen.main.scale)),
             cacheSizeBytes: tilingOptions.cacheSize,
             debugTileOverlay: tilingOptions.debugTileOverlay,
             // 画素数を増やしたぶんアイコンも大きく描く。そうしないと 1/3 の大きさになる。
             iconScaleCallback: { state, zoom in
                 (baseCallback?(state, zoom) ?? 1.0) * contentScale
-            }
+            },
+            // 他のプロバイダと同じく tilingOptions から。渡し忘れると間引きが黙って無効になり、
+            // 密なデータで描画が重くなる。
+            declutterPx: tilingOptions.declutterPx
         )
         tileServer.register(routeId: routeId, provider: created)
         tileRenderer = created
