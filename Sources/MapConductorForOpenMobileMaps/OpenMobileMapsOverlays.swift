@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 /*
@@ -312,7 +312,7 @@ final class OpenMobileMapsGroundImageOverlayRenderer:
         guard let layerInterface = layer.asLayerInterface() else { return nil }
         return OpenMobileMapsActualGroundImage(
             layer: layer,
-            layerInterface: layers.insertBelowOverlays(layerInterface, on: map)
+            layerInterface: layers.insertBelowOverlays(layerInterface, key: OverlayStackKey(.groundImage), on: map)
         )
     }
 
@@ -429,7 +429,12 @@ final class OpenMobileMapsRasterLayerOverlayRenderer: RasterLayerOverlayRenderer
         }
         return OpenMobileMapsActualRasterLayer(
             layer: layer,
-            layerInterface: layers.insertBelowOverlays(layerInterface, on: map)
+            layerInterface: layers.insertBelowOverlays(
+                layerInterface,
+                // マーカーのタイル（`marker-tile-…`）もこの経路で載るが、帯はマーカー。
+                key: OverlayStacking.rasterKey(stateId: state.id, zIndex: state.zIndex),
+                on: map
+            )
         )
     }
 }
