@@ -470,6 +470,9 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
         await circleController.clear()
         await groundImageController.clear()
         await rasterLayerController.clear()
+        // strategy（クラスタリングなど）が描いたマーカーも消す。OMM は自分の strategyManager を
+        // MarkerRenderingSupportKey に登録している（他プロバイダは state.serviceRegistry 経由で同じものに届く）。
+        await strategyManager.clearMarkers()
         layers.clearAll()
     }
 
