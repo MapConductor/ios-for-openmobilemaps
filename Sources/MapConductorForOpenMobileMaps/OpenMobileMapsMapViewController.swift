@@ -149,6 +149,19 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
             }
         }
 
+        // Many polygons are drawn into raster tiles and shown as one raster
+        // layer; taps still resolve against the original shapes.
+        let rasterForPolygonTiles = rasterLayerController
+        let polygonTiler = PolygonTiler()
+        polygonTiler.onTemplate = { [weak rasterForPolygonTiles] template, tileSize in
+            if let template {
+                await rasterForPolygonTiles?.upsert(state: PolygonTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterForPolygonTiles?.removeById(PolygonTiler.layerId)
+            }
+        }
+        polygonController.tiler = polygonTiler
+
         registerOverlayController(markerController)
         registerOverlayController(polylineController)
         registerOverlayController(polygonController)
