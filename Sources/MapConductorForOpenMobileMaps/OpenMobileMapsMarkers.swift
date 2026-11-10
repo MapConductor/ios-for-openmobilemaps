@@ -396,6 +396,7 @@ final class OpenMobileMapsMarkerController:
             defaultMarkerIcon: defaultIconForTiling,
             tilingEnabled: tilingOptions.enabled,
             tiledMarkerIds: &localTiledMarkerIds,
+            addedTracker: addedTracker,
             shouldTile: { state in
                 // ドラッグ中／アニメーション中のマーカーはタイルに焼けない
                 // （タイルは動かせないので、指に追従しなくなる）。
@@ -413,6 +414,9 @@ final class OpenMobileMapsMarkerController:
         } else {
             removeTileOverlay()
         }
+
+        // The newly tiled markers are on the map once their tile layer is.
+        await addedTracker.admitAndNotify(result.tiledAdded)
     }
 
     /// タイル担当から外れた entity にネイティブのアイコンを戻す。

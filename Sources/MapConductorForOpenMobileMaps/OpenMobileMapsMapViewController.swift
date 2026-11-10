@@ -161,6 +161,18 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
             }
         }
         polygonController.tiler = polygonTiler
+        // Many polylines likewise, in their own raster layer in the polyline band
+        // (under the natively drawn polylines); taps still resolve against the original lines.
+        let rasterForPolylineTiles = rasterLayerController
+        let polylineTiler = PolylineTiler()
+        polylineTiler.onTemplate = { [weak rasterForPolylineTiles] template, tileSize in
+            if let template {
+                await rasterForPolylineTiles?.upsert(state: PolylineTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterForPolylineTiles?.removeById(PolylineTiler.layerId)
+            }
+        }
+        polylineController.tiler = polylineTiler
 
         registerOverlayController(markerController)
         registerOverlayController(polylineController)
