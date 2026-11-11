@@ -214,7 +214,9 @@ final class OpenMobileMapsCircleOverlayRenderer: AbstractCircleOverlayRenderer<O
     override func removeCircle(entity _: CircleEntity<OpenMobileMapsActualCircle>) async {}
 
     override func onPostProcess() async {
-        let entities = circleManager.allEntities()
+        // Tiled circles (CircleTiler) have no native circle; allEntities() would
+        // make an entity for each of them, seconds at hundreds of thousands.
+        let entities = circleManager.nativeEntities()
         fillLayer?.setPolygons(entities.flatMap { $0.circle?.fills ?? [] }, origin: renderOrigin)
         outlineLayer?.setLines(entities.flatMap { $0.circle?.outlines ?? [] })
     }

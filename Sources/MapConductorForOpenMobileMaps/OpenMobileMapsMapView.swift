@@ -294,7 +294,9 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
             overlayScope?.polygonCollector.sync(content.polygons.map(\.state))
             controller?.polygonController.tiler?.refreshIfServerMoved()
             if controller?.polylineController.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+            if controller?.circleController.tiler?.setOptions(content.circleTilingOptions) == true { overlayScope?.circleCollector.flush() }
             controller?.polylineController.tiler?.refreshIfServerMoved()
+            controller?.circleController.tiler?.refreshIfServerMoved()
             overlayScope?.circleCollector.sync(content.circles.map(\.state))
             overlayScope?.groundImageCollector.sync(content.groundImages.map(\.state))
             overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map(\.state))
