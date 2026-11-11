@@ -173,6 +173,15 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
             }
         }
         polylineController.tiler = polylineTiler
+        let circleTiler = CircleTiler()
+        circleTiler.onTemplate = { [weak rasterForPolylineTiles] template, tileSize in
+            if let template {
+                await rasterForPolylineTiles?.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterForPolylineTiles?.removeById(CircleTiler.layerId)
+            }
+        }
+        circleController.tiler = circleTiler
 
         registerOverlayController(markerController)
         registerOverlayController(polylineController)
