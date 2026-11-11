@@ -28,7 +28,7 @@ import UIKit
 /// （ios-for-here と同じ立場）。コアの `update(state:)` → ``onChange(data:)`` が
 /// そのままドラッグの駆動経路になる。
 @MainActor
-final class OpenMobileMapsMarkerOverlayRenderer: MarkerOverlayRendererProtocol {
+final class OpenMobileMapsMarkerOverlayRenderer: MarkerOverlayRendererProtocol, MarkerDrawOrderFrameReceiver {
     typealias ActualMarker = OpenMobileMapsActualMarker
 
     /// これ未満の引き伸ばしの差ではアイコンを作り直さない。
@@ -162,16 +162,31 @@ final class OpenMobileMapsMarkerOverlayRenderer: MarkerOverlayRendererProtocol {
     /// （除かないと同じマーカーが二重に出る）。
     ///
     /// アイコンレイヤは渡した順に描く（後ろほど手前）。マネージャの並びは足した順なので、
-    /// 重なり順（``MarkerDrawOrder``: zIndex → 南 → 西）で並べ替えてから渡す。
+    /// 重なり順（``MarkerDrawOrder``: zIndex → 回したあとの画面で下 → 左）で並べ替えてから渡す。
     private func applyIcons() {
+        let frame = drawOrderFrame
         let icons = markerManager.allEntities()
             .filter { !$0.tiling && $0.visible && !hiddenIds.contains($0.state.id) }
             .compactMap { entity in
-                entity.marker.map { (MarkerDrawOrder.key(zIndex: entity.state.zIndex, position: entity.state.position), $0) }
+                entity.marker.map {
+                    (MarkerDrawOrder.key(zIndex: entity.state.zIndex, position: entity.state.position, frame: frame), $0)
+                }
             }
             .sorted { $0.0 < $1.0 }
             .map(\.1)
         iconLayer?.setIcons(icons)
+    }
+
+    /// 重なり順を出すときの地図の向き（``MarkerDrawOrder``）。
+    private var drawOrderFrame: MarkerDrawOrder.Frame = .northUp
+
+    /// 回したら、渡す順（画面で下ほど後ろ＝手前）を付け直す。
+    func onDrawOrderFrameChanged(
+        _ frame: MarkerDrawOrder.Frame,
+        entities: [MarkerEntity<OpenMobileMapsActualMarker>]
+    ) async {
+        drawOrderFrame = frame
+        applyIcons()
     }
 
     /// 傾きが変わったので、アイコンの縦の引き伸ばしを付け直す。
