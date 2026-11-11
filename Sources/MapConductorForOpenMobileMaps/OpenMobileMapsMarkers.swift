@@ -160,10 +160,17 @@ final class OpenMobileMapsMarkerOverlayRenderer: MarkerOverlayRendererProtocol {
     ///
     /// `tiling` が立っている entity はラスタータイルとして描かれるので、ここでは除く
     /// （除かないと同じマーカーが二重に出る）。
+    ///
+    /// アイコンレイヤは渡した順に描く（後ろほど手前）。マネージャの並びは足した順なので、
+    /// 重なり順（``MarkerDrawOrder``: zIndex → 南 → 西）で並べ替えてから渡す。
     private func applyIcons() {
         let icons = markerManager.allEntities()
             .filter { !$0.tiling && $0.visible && !hiddenIds.contains($0.state.id) }
-            .compactMap(\.marker)
+            .compactMap { entity in
+                entity.marker.map { (MarkerDrawOrder.key(zIndex: entity.state.zIndex, position: entity.state.position), $0) }
+            }
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
         iconLayer?.setIcons(icons)
     }
 
