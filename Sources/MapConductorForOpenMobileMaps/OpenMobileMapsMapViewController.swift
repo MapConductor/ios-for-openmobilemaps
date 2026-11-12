@@ -78,6 +78,14 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// カメライベントが tilt = 0 で上書きし、Tilt ページが 1 フレームで元に戻る）。
     private var logicalTilt: Double = 0.0
 
+    /// 直近の移動で要求されたパディング。tilt をビューの回転で擬似表現しているので、
+    /// SDK のパディング（2D カメラに効く）は傾けた画面と合わない。中心をずらして再現し
+    /// （``CameraPaddingEmulation``、遠近なし＝視野角 0）、読み戻しで逆にずらす。
+    private var lastPaddings: MapPaddingsProtocol?
+
+    /// tilt は遠近なしで描いている（ビューを傾けるだけ）ので、縦の視野角は 0。
+    static let verticalFieldOfView: Double = 0.0
+
     /// 前回配ったカメラ。同じ値なら配らない（``notifyCamera()`` を参照）。
     private var lastNotifiedCamera: MapCameraPosition?
 
@@ -268,7 +276,22 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// ``OpenMobileMapsTiltEmulation/restoreLogicalCamera(center:zoom:bearing:logicalTilt:)``
     /// で論理値へ巻き戻す。
     func readNativeCamera() -> MapCameraPosition {
-        readLogicalCamera().copy(visibleRegion: ommHolder.buildVisibleRegion())
+        CameraPaddingEmulation.restored(
+            readLogicalCamera().copy(visibleRegion: ommHolder.buildVisibleRegion()),
+            paddings: lastPaddings,
+            fov: Self.verticalFieldOfView,
+            viewportSize: ommHolder.mapView.bounds.size
+        )
+    }
+
+    /// SDK へ渡すカメラ。パディングの分だけ中心をずらす。アニメーションの補間はこの中心の空間で行う。
+    private func paddingApplied(_ position: MapCameraPosition) -> MapCameraPosition {
+        lastPaddings = position.paddings
+        return CameraPaddingEmulation.applied(
+            to: position,
+            fov: Self.verticalFieldOfView,
+            viewportSize: ommHolder.mapView.bounds.size
+        )
     }
 
     /// 可視領域を載せない軽い読み取り。
@@ -299,7 +322,7 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
 
     public func moveCamera(position: MapCameraPosition) {
         cancelCameraAnimation()
-        apply(position)
+        apply(paddingApplied(position))
     }
 
     /// カメラを `duration` ミリ秒かけて動かす。
@@ -320,6 +343,7 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// ``OpenMobileMapsCameraAnimation`` にある。
     public func animateCamera(position: MapCameraPosition, duration: Long) {
         cancelCameraAnimation()
+        let position = paddingApplied(position)
         guard duration > 0 else {
             apply(position)
             return
