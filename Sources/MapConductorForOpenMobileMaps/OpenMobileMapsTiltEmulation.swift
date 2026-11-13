@@ -1,5 +1,5 @@
 import Foundation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 /// Open Mobile Maps の 2D カメラ向けの tilt 擬似表現。
 ///
@@ -44,7 +44,7 @@ enum OpenMobileMapsTiltEmulation {
         let tiltAbsRad = tiltAbsDeg * .pi / 180.0
         let altitude = altitudeFor(unifiedZoom: position.zoom, latitude: origin.latitude)
         let distanceForward = altitude * cos(tiltAbsRad) * tan(tiltAbsRad) * targetDistanceScale
-        let target = Spherical.computeOffset(origin: origin, distance: distanceForward, heading: position.bearing)
+        let target = Spherical.computeOffset(origin: origin, distance: distanceForward, heading: CameraBearing.toNativeHeading(position.bearing))
         return (target, zoom)
     }
 
@@ -65,7 +65,7 @@ enum OpenMobileMapsTiltEmulation {
         let originalPosition = Spherical.computeOffset(
             origin: center,
             distance: distanceBackward,
-            heading: bearing + 180.0
+            heading: CameraBearing.toNativeHeading(bearing) + 180.0
         )
         return (originalPosition, originalZoom)
     }

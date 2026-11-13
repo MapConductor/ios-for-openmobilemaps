@@ -1,5 +1,6 @@
 import Foundation
 import MapCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 /// このドライバーが地図に載せるレイヤ一式と、その重ね順。
 ///
@@ -13,9 +14,14 @@ import MapCore
 /// ## 重ね順（下から）
 ///
 /// ```
-/// 地図デザイン → ラスターレイヤ・グラウンドイメージ → ポリゴン塗り → ポリゴン輪郭
-///   → 円の塗り → 円の輪郭 → ポリライン → マーカー
+/// 地図デザイン → ラスターレイヤ → グラウンドイメージ → ポリゴン塗り → ポリゴン輪郭
+///   → 円の塗り → 円の輪郭 → ポリライン → マーカーのタイル → マーカー
 /// ```
+///
+/// これは全プロバイダ共通の帯の順（``OverlayBand``）。ラスターとグラウンドイメージは
+/// 以前は同じ枠に空いた索引から詰めていたので、送り直すと上下が入れ替わった。
+/// マーカーのタイルもラスターの経路で載るため、ポリゴン等より下に描かれていた。
+/// 今は帯ごとに索引の区間を分けている（``insertBelowOverlays(_:key:on:)``）。
 ///
 /// 他プロバイダのクリックのカスケード（marker → circle → groundImage → polyline →
 /// polygon → map）と**上下が逆に見える**が、これは正しい。カスケードは「上にあるものから
@@ -46,6 +52,13 @@ final class OpenMobileMapsLayers {
     /// 固定のオーバーレイ 6 種。下の枠を使い切らないよう十分離す。
     private static let fixedIndexFirst: Int32 = 1000
 
+    /// 固定レイヤどうしの間隔。間にマーカーのタイルを入れるため空けておく。
+    private static let fixedIndexStride: Int32 = 100
+
+    /// マーカーのタイル（ラスターの経路で載る）。ポリラインの上・マーカーのアイコンの下。
+    /// 固定レイヤの並び（``fixedLayers``）でポリラインは 4 番目、アイコンは 5 番目。
+    private static let markerTileIndexFirst: Int32 = fixedIndexFirst + 4 * fixedIndexStride + fixedIndexStride / 2
+
     let polygonFillLayer = MCPolygonLayerInterface.create()
     let polygonOutlineLayer = MCLineLayerInterface.create()
     let circleFillLayer = MCPolygonLayerInterface.create()
@@ -62,12 +75,11 @@ final class OpenMobileMapsLayers {
     /// 地図デザインのレイヤ。差し替え時に外すため、**載せた値そのもの**を持っておく。
     private var designLayer: MCLayerInterface?
 
-    /// 地図デザインとオーバーレイ群の間に入っているレイヤ（ラスター / グラウンドイメージ）と、その索引。
-    private var belowOverlayIndices: [ObjectIdentifier: Int32] = [:]
-
-    /// 外したレイヤの索引。使い回さないと、タイルの張り替えを繰り返すうちに索引が尽きる。
-    private var freeBelowIndices: [Int32] = []
-    private var nextBelowIndex = OpenMobileMapsLayers.belowIndexFirst
+    /// ラスター / グラウンドイメージ / マーカーのタイルが使っている索引。帯ごとに別の区間を持つ。
+    private var slotIndices: [ObjectIdentifier: Int32] = [:]
+    /// 帯ごとの、外したレイヤの索引（使い回さないと張り替えを繰り返すうちに区間が尽きる）と次の索引。
+    private var freeSlots: [OverlayBand: [Int32]] = [:]
+    private var nextSlot: [OverlayBand: Int32] = [:]
 
     /// `asLayerInterface()` の戻りを**一度だけ**取って持っておく（罠 2）。
     private lazy var fixedLayers: [MCLayerInterface] = [
@@ -99,7 +111,7 @@ final class OpenMobileMapsLayers {
         strategyIconLayer?.setLayerClickable(false)
 
         for (offset, layer) in fixedLayers.enumerated() {
-            map.insertLayer(at: layer, at: Self.fixedIndexFirst + Int32(offset))
+            map.insertLayer(at: layer, at: Self.fixedIndexFirst + Int32(offset) * Self.fixedIndexStride)
         }
     }
 
@@ -111,28 +123,58 @@ final class OpenMobileMapsLayers {
         map.insertLayer(at: layer, at: Self.designIndex)
     }
 
-    /// ラスターレイヤ／グラウンドイメージを、オーバーレイ群より下・地図デザインより上へ入れる。
+    /// 帯ごとの索引の区間（下端）。ラスター < グラウンドイメージ < （固定のオーバーレイ）
+    /// < マーカーのタイル（ポリラインとマーカーのアイコンの間）。
+    private static func slotBase(_ band: OverlayBand) -> Int32 {
+        switch band {
+        case .rasterLayer: return belowIndexFirst
+        case .groundImage: return belowIndexFirst + 500
+        case .marker: return markerTileIndexFirst
+        // ポリゴンのタイル（feat/polygon-tiling）はポリゴン塗りの直前に入れる。
+        case .polygon: return fixedIndexFirst - fixedIndexStride / 2
+        case .circle: return fixedIndexFirst + 2 * fixedIndexStride - fixedIndexStride / 2
+        case .polyline: return fixedIndexFirst + 4 * fixedIndexStride - fixedIndexStride / 2
+        }
+    }
+
+    /// ラスターレイヤ／グラウンドイメージ／マーカーのタイルを、帯の区間へ入れる。
+    ///
+    /// 以前はラスターとグラウンドイメージが同じ区間を空いた索引から詰めていたので、
+    /// 送り直すと上下が入れ替わり、マーカーのタイルもポリゴン等より下に描かれていた。
+    /// 帯ごとに区間を分ければ、追加・送り直しの順に関わらず帯の順になる。
+    /// 既に載っているレイヤは動かさない（OMM では一度外したレイヤを入れ直すと描かれなくなる。実機）。
+    /// 帯の中の zIndex は反映しない（従来どおり。区間の中は空いた索引の順）。
     ///
     /// - Returns: 外すときに ``remove(_:from:)`` へ渡す値。
     ///   **別途 `asLayerInterface()` を呼び直さないこと。**
     @discardableResult
-    func insertBelowOverlays(_ layer: MCLayerInterface, on map: MCMapInterface) -> MCLayerInterface {
+    func insertBelowOverlays(
+        _ layer: MCLayerInterface,
+        key: OverlayStackKey,
+        on map: MCMapInterface
+    ) -> MCLayerInterface {
+        let band = key.band
         let index: Int32
-        if freeBelowIndices.isEmpty {
-            index = nextBelowIndex
-            nextBelowIndex += 1
+        if var free = freeSlots[band], !free.isEmpty {
+            index = free.removeFirst()
+            freeSlots[band] = free
         } else {
-            index = freeBelowIndices.removeFirst()
+            index = Self.slotBase(band) + (nextSlot[band] ?? 0)
+            nextSlot[band] = (nextSlot[band] ?? 0) + 1
         }
-        belowOverlayIndices[ObjectIdentifier(layer)] = index
+        slotIndices[ObjectIdentifier(layer)] = index
+        slotBands[ObjectIdentifier(layer)] = band
         map.insertLayer(at: layer, at: index)
         return layer
     }
 
+    private var slotBands: [ObjectIdentifier: OverlayBand] = [:]
+
     func remove(_ layer: MCLayerInterface, from map: MCMapInterface) {
-        if let index = belowOverlayIndices.removeValue(forKey: ObjectIdentifier(layer)) {
-            freeBelowIndices.append(index)
-            freeBelowIndices.sort()
+        let id = ObjectIdentifier(layer)
+        if let index = slotIndices.removeValue(forKey: id), let band = slotBands.removeValue(forKey: id) {
+            freeSlots[band, default: []].append(index)
+            freeSlots[band]?.sort()
         }
         map.removeLayer(layer)
     }

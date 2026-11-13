@@ -32,12 +32,48 @@ final class OpenMobileMapsTileLoader: MCTextureLoader {
 
     override func loadTextureAsync(_ url: String, etag: String?) -> DJFuture<MCTextureLoaderResult> {
         let promise = DJPromise<MCTextureLoaderResult>()
+        if Self.isLocalTileServer(url) {
+            // The SDK's own tiles (polygon, polyline and marker tiles, local rasters)
+            // are translucent PNGs: premultiply them, see `premultipliedTexture`.
+            loadDataAsync(url, etag: etag).then { future in
+                guard let result = future.get() else { return nil }
+                promise.setValue(Self.substituteEmptyTile(for: url, result: Self.premultipliedTexture(result)))
+                return nil
+            }
+            return promise.getFuture()
+        }
         super.loadTextureAsync(url, etag: etag).then { future in
             guard let result = future.get() else { return nil }
             promise.setValue(Self.substituteEmptyTile(for: url, result: result))
             return nil
         }
         return promise.getFuture()
+    }
+
+    /// The tile's PNG as a premultiplied texture.
+    ///
+    /// `MCTextureLoader` hands the PNG to `MTKTextureLoader` as is, which keeps
+    /// PNG's straight (non-premultiplied) alpha, but the SDK's raster pipeline
+    /// blends premultiplied colour (`one, oneMinusSourceAlpha`). Opaque map tiles
+    /// do not notice; a translucent fill does: every channel above the alpha is
+    /// clipped to it, so the polygon tiles' 35 % blue `(51, 102, 255, 89)` came
+    /// out as a faint grey-green `(51, 89, 89)` over the map and the polygons were
+    /// almost invisible. Anti-aliased edges of the polyline and marker tiles were
+    /// too light the same way.
+    private static func premultipliedTexture(_ result: MCDataLoaderResult) -> MCTextureLoaderResult {
+        guard result.status == .OK else {
+            return MCTextureLoaderResult(data: nil, etag: result.etag, status: result.status, errorCode: result.errorCode)
+        }
+        guard let data = result.data, !data.isEmpty else {
+            // 204 / empty body: nothing to draw, as `MCTextureLoader` reports it.
+            return MCTextureLoaderResult(data: nil, etag: result.etag, status: .OK, errorCode: nil)
+        }
+        do {
+            let texture = try TextureHolder(premultipliedData: data, textureUsableSize: nil)
+            return MCTextureLoaderResult(data: texture, etag: result.etag, status: .OK, errorCode: nil)
+        } catch {
+            return MCTextureLoaderResult(data: nil, etag: result.etag, status: .ERROR_OTHER, errorCode: "PMUL")
+        }
     }
 
     /// ローカルサーバからのエラーだけを透明タイルへ読み替える。

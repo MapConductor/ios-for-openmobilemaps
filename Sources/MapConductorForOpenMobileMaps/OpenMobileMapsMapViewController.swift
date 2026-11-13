@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import QuartzCore
 import UIKit
 
@@ -78,6 +78,14 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// カメライベントが tilt = 0 で上書きし、Tilt ページが 1 フレームで元に戻る）。
     private var logicalTilt: Double = 0.0
 
+    /// 直近の移動で要求されたパディング。tilt をビューの回転で擬似表現しているので、
+    /// SDK のパディング（2D カメラに効く）は傾けた画面と合わない。中心をずらして再現し
+    /// （``CameraPaddingEmulation``、遠近なし＝視野角 0）、読み戻しで逆にずらす。
+    private var lastPaddings: MapPaddingsProtocol?
+
+    /// tilt は遠近なしで描いている（ビューを傾けるだけ）ので、縦の視野角は 0。
+    static let verticalFieldOfView: Double = 0.0
+
     /// 前回配ったカメラ。同じ値なら配らない（``notifyCamera()`` を参照）。
     private var lastNotifiedCamera: MapCameraPosition?
 
@@ -148,6 +156,40 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
                 }
             }
         }
+
+        // Many polygons are drawn into raster tiles and shown as one raster
+        // layer; taps still resolve against the original shapes.
+        let rasterForPolygonTiles = rasterLayerController
+        let polygonTiler = PolygonTiler()
+        polygonTiler.onTemplate = { [weak rasterForPolygonTiles] template, tileSize in
+            if let template {
+                await rasterForPolygonTiles?.upsert(state: PolygonTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterForPolygonTiles?.removeById(PolygonTiler.layerId)
+            }
+        }
+        polygonController.tiler = polygonTiler
+        // Many polylines likewise, in their own raster layer in the polyline band
+        // (under the natively drawn polylines); taps still resolve against the original lines.
+        let rasterForPolylineTiles = rasterLayerController
+        let polylineTiler = PolylineTiler()
+        polylineTiler.onTemplate = { [weak rasterForPolylineTiles] template, tileSize in
+            if let template {
+                await rasterForPolylineTiles?.upsert(state: PolylineTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterForPolylineTiles?.removeById(PolylineTiler.layerId)
+            }
+        }
+        polylineController.tiler = polylineTiler
+        let circleTiler = CircleTiler()
+        circleTiler.onTemplate = { [weak rasterForPolylineTiles] template, tileSize in
+            if let template {
+                await rasterForPolylineTiles?.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterForPolylineTiles?.removeById(CircleTiler.layerId)
+            }
+        }
+        circleController.tiler = circleTiler
 
         registerOverlayController(markerController)
         registerOverlayController(polylineController)
@@ -234,7 +276,22 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// ``OpenMobileMapsTiltEmulation/restoreLogicalCamera(center:zoom:bearing:logicalTilt:)``
     /// で論理値へ巻き戻す。
     func readNativeCamera() -> MapCameraPosition {
-        readLogicalCamera().copy(visibleRegion: ommHolder.buildVisibleRegion())
+        CameraPaddingEmulation.restored(
+            readLogicalCamera().copy(visibleRegion: ommHolder.buildVisibleRegion()),
+            paddings: lastPaddings,
+            fov: Self.verticalFieldOfView,
+            viewportSize: ommHolder.mapView.bounds.size
+        )
+    }
+
+    /// SDK へ渡すカメラ。パディングの分だけ中心をずらす。アニメーションの補間はこの中心の空間で行う。
+    private func paddingApplied(_ position: MapCameraPosition) -> MapCameraPosition {
+        lastPaddings = position.paddings
+        return CameraPaddingEmulation.applied(
+            to: position,
+            fov: Self.verticalFieldOfView,
+            viewportSize: ommHolder.mapView.bounds.size
+        )
     }
 
     /// 可視領域を載せない軽い読み取り。
@@ -265,7 +322,7 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
 
     public func moveCamera(position: MapCameraPosition) {
         cancelCameraAnimation()
-        apply(position)
+        apply(paddingApplied(position))
     }
 
     /// カメラを `duration` ミリ秒かけて動かす。
@@ -286,6 +343,7 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// ``OpenMobileMapsCameraAnimation`` にある。
     public func animateCamera(position: MapCameraPosition, duration: Long) {
         cancelCameraAnimation()
+        let position = paddingApplied(position)
         guard duration > 0 else {
             apply(position)
             return
@@ -410,6 +468,11 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     public func setMapDesignType(_ value: any OpenMobileMapsMapDesignTypeProtocol) {
         if currentDesign?.getValue() == value.getValue() { return }
         currentDesign = value
+        // No template, no layer: the design that draws nothing.
+        guard !value.tileUrlTemplate.isEmpty else {
+            layers.setDesignLayer(nil, on: ommHolder.map)
+            return
+        }
         let config = WebMercatorTileLayerConfig(
             layerName: "design-\(value.id)",
             urlTemplate: value.tileUrlTemplate,
@@ -465,6 +528,9 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
         await circleController.clear()
         await groundImageController.clear()
         await rasterLayerController.clear()
+        // strategy（クラスタリングなど）が描いたマーカーも消す。OMM は自分の strategyManager を
+        // MarkerRenderingSupportKey に登録している（他プロバイダは state.serviceRegistry 経由で同じものに届く）。
+        await strategyManager.clearMarkers()
         layers.clearAll()
     }
 
@@ -515,19 +581,21 @@ public final class OpenMobileMapsMapViewController: MapViewControllerProtocol {
     /// マーカータイルのラスターレイヤ id の前置き。外すときの目印。
     static let markerTileIdPrefix = "marker-tile-"
 
-    /// 方位の符号。**SDK は MapConductor と逆回りである。**
+    /// 方位の符号。**SDK の `setRotation` は MapConductor の bearing と同じ向き**
+    /// （どちらも「地図を時計回りに回す量」）なので、変換は恒等になる。
     ///
-    /// MapConductor の bearing は Google 準拠で「カメラが向いている方位を北から時計回りに測る」。
-    /// SDK の `setRotation` は地図を反時計回りに回す量なので、符号を反転する。
-    /// 反転を忘れると bearing 270 の地図が 90 として描かれ、**ちょうど 180 度ずれる**
-    /// （単独で見ると「回っている」ので正しく見えてしまう。android では Tilt ページを
-    /// MapLibre と並べて気づいた）。
-    static func nativeRotationFromBearing(_ bearing: Double) -> Float { Float(-bearing) }
+    /// ここは机上ではなく端末で決めた値である。基準は「MapLibre と並べて同じ向きに
+    /// 描かれること」で、MapLibre 側が heading 系（bearing の符号反転）に変わったのに
+    /// 合わせてこちらも反転させてある（android-for-openmobilemaps と同じ）。
+    /// **符号を触ったら必ず Tilt ページを MapLibre と並べて確認すること。**
+    /// 単独で見ると「回っている」ので正しく見えてしまう。
+    static func nativeRotationFromBearing(_ bearing: Double) -> Float {
+        Float(CameraBearing.toNativeRotation(bearing))
+    }
 
     /// SDK の回転角 → MapConductor の bearing（0 以上 360 未満）。
     static func bearingFromNativeRotation(_ rotation: Float) -> Double {
-        let bearing = Double(-rotation).truncatingRemainder(dividingBy: 360.0)
-        return bearing < 0 ? bearing + 360.0 : bearing
+        CameraBearing.bearingFromNativeRotation(Double(rotation))
     }
 }
 

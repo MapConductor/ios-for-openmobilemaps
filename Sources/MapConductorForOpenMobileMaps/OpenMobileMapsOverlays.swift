@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 /*
@@ -214,7 +214,9 @@ final class OpenMobileMapsCircleOverlayRenderer: AbstractCircleOverlayRenderer<O
     override func removeCircle(entity _: CircleEntity<OpenMobileMapsActualCircle>) async {}
 
     override func onPostProcess() async {
-        let entities = circleManager.allEntities()
+        // Tiled circles (CircleTiler) have no native circle; allEntities() would
+        // make an entity for each of them, seconds at hundreds of thousands.
+        let entities = circleManager.nativeEntities()
         fillLayer?.setPolygons(entities.flatMap { $0.circle?.fills ?? [] }, origin: renderOrigin)
         outlineLayer?.setLines(entities.flatMap { $0.circle?.outlines ?? [] })
     }
@@ -312,7 +314,7 @@ final class OpenMobileMapsGroundImageOverlayRenderer:
         guard let layerInterface = layer.asLayerInterface() else { return nil }
         return OpenMobileMapsActualGroundImage(
             layer: layer,
-            layerInterface: layers.insertBelowOverlays(layerInterface, on: map)
+            layerInterface: layers.insertBelowOverlays(layerInterface, key: OverlayStackKey(.groundImage), on: map)
         )
     }
 
@@ -412,7 +414,13 @@ final class OpenMobileMapsRasterLayerOverlayRenderer: RasterLayerOverlayRenderer
             scheme: scheme,
             // ラスターオーバーレイは透過前提なので、粗い親レベルを重ね描きしない
             numDrawPreviousLayers: 0,
-            maskTile: true
+            maskTile: true,
+            // マーカーのタイルは点やラベルの大きさを前提に焼いてあるので、引き伸ばすと
+            // 点もラベルも大きく描かれ、重ならないように置いたラベルが重なる。
+            // 他のプロバイダと同じく、近い方の段を選ばせる。
+            zoomLevelScaleFactor: state.id.hasPrefix(OpenMobileMapsMapViewController.markerTileIdPrefix)
+                ? Float(2.0.squareRoot())
+                : 1.0
         )
         guard let layer = MCTiled2dMapRasterLayerInterface.create(config, loaders: loaders),
               let layerInterface = layer.asLayerInterface()
@@ -423,7 +431,12 @@ final class OpenMobileMapsRasterLayerOverlayRenderer: RasterLayerOverlayRenderer
         }
         return OpenMobileMapsActualRasterLayer(
             layer: layer,
-            layerInterface: layers.insertBelowOverlays(layerInterface, on: map)
+            layerInterface: layers.insertBelowOverlays(
+                layerInterface,
+                // マーカーのタイル（`marker-tile-…`）もこの経路で載るが、帯はマーカー。
+                key: OverlayStacking.rasterKey(stateId: state.id, zIndex: state.zIndex),
+                on: map
+            )
         )
     }
 }

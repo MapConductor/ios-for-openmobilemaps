@@ -33,11 +33,16 @@ final class WebMercatorTileLayerConfig: NSObject, MCTiled2dMapLayerConfig {
     private let scheme: TileScheme
     private let numDrawPreviousLayers: Int32
     private let maskTile: Bool
+    private let zoomLevelScaleFactor: Float
 
     /// - Parameters:
     ///   - urlTemplate: `{z}` `{x}` `{y}` を含む URL。
     ///   - tileSize: タイル 1 枚の一辺（**ポイント**）。OSM 系は 256、@2x 系は 512。
     ///   - scheme: `.TMS` なら y を反転する。
+    ///   - zoomLevelScaleFactor: 段の選び方。SDK は「今の縮尺より細かい段が見つかったら、
+    ///     その 1 つ手前の段」を使うので、既定の 1 では統一ズームの**切り捨て**になる
+    ///     （ズーム 18.98 で 18 段、画面では最大 2 倍に引き伸ばされる）。√2 にすると
+    ///     **四捨五入**になり、MapLibre などと同じく 0.7〜1.4 倍に収まる。
     init(
         layerName: String,
         urlTemplate: String,
@@ -46,7 +51,8 @@ final class WebMercatorTileLayerConfig: NSObject, MCTiled2dMapLayerConfig {
         maxZoomLevel: Int = 22,
         scheme: TileScheme = .XYZ,
         numDrawPreviousLayers: Int32 = 2,
-        maskTile: Bool = false
+        maskTile: Bool = false,
+        zoomLevelScaleFactor: Float = 1.0
     ) {
         self.layerName = layerName
         self.urlTemplate = urlTemplate
@@ -56,6 +62,7 @@ final class WebMercatorTileLayerConfig: NSObject, MCTiled2dMapLayerConfig {
         self.scheme = scheme
         self.numDrawPreviousLayers = numDrawPreviousLayers
         self.maskTile = maskTile
+        self.zoomLevelScaleFactor = zoomLevelScaleFactor
         super.init()
     }
 
@@ -90,7 +97,7 @@ final class WebMercatorTileLayerConfig: NSObject, MCTiled2dMapLayerConfig {
 
     func getZoomInfo() -> MCTiled2dMapZoomInfo {
         MCTiled2dMapZoomInfo(
-            zoomLevelScaleFactor: 1.0,
+            zoomLevelScaleFactor: zoomLevelScaleFactor,
             numDrawPreviousLayers: numDrawPreviousLayers,
             numDrawPreviousOrLaterTLayers: 0,
             adaptScaleToScreen: false,

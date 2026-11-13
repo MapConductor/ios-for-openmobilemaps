@@ -1,6 +1,6 @@
 import Foundation
 import MapCore
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import SwiftUI
 import UIKit
 
@@ -24,6 +24,8 @@ public struct OpenMobileMapsMapView: View {
 
     private let handlers: MapViewHandlers<OpenMobileMapsViewState>
     private let cameraRestriction: CameraRestriction?
+    private let style: MapViewStyle?
+    private let onStyleDiagnostics: (([String]) -> Void)?
     private let content: () -> MapViewContent
 
     public init(
@@ -36,6 +38,12 @@ public struct OpenMobileMapsMapView: View {
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
         sdkInitialize: (() -> Void)? = nil,
+        /// How the map looks, when the app states it rather than naming a
+        /// design. `MapConductorVectorStyle` builds one; what happens
+        /// underneath depends on this backend and the app does not have to
+        /// know.
+        style: MapViewStyle? = nil,
+        onStyleDiagnostics: (([String]) -> Void)? = nil,
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
@@ -49,6 +57,8 @@ public struct OpenMobileMapsMapView: View {
             sdkInitialize: sdkInitialize
         )
         self.cameraRestriction = cameraRestriction
+        self.style = style
+        self.onStyleDiagnostics = onStyleDiagnostics
         self.content = content
     }
 
@@ -70,6 +80,8 @@ public struct OpenMobileMapsMapView: View {
                 state: state,
                 cameraRestriction: cameraRestriction,
                 handlers: handlers,
+                style: style,
+                onStyleDiagnostics: onStyleDiagnostics,
                 content: mapContent
             )
         }
@@ -80,6 +92,8 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: OpenMobileMapsViewState
     let cameraRestriction: CameraRestriction?
     let handlers: MapViewHandlers<OpenMobileMapsViewState>
+    let style: MapViewStyle?
+    let onStyleDiagnostics: (([String]) -> Void)?
     let content: MapViewContent
 
     func makeCoordinator() -> Coordinator {
@@ -113,6 +127,9 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: OpenMobileMapsMapSurface, context: Context) {
+        // Every evaluation of the app's `body` lands here; most calls do
+        // nothing. See `MapViewStyleHost.apply`.
+        context.coordinator.applyStyle(style, onDiagnostics: onStyleDiagnostics)
         _ = uiView
         // 地図デザインとジェスチャはここで反映する。`setMapDesignType` は同じデザインなら
         // 何もしないので、毎フレーム呼んでもタイルレイヤは張り替わらない。
@@ -123,6 +140,7 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
     }
 
     static func dismantleUIView(_: OpenMobileMapsMapSurface, coordinator: Coordinator) {
+        coordinator.disposeStyle()
         coordinator.unbind()
     }
 
@@ -138,6 +156,13 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
         private weak var surface: OpenMobileMapsMapSurface?
         private var controller: OpenMobileMapsMapViewController?
         private var overlayScope: MapOverlayScope?
+        /// 同じマーカー一覧の再送を入口で帰す門番（他プロバイダの `syncMarkers` と同じ）。
+        ///
+        /// SwiftUI はカメラが動くたびに content を送り直してくる。コレクタの `sync` は
+        /// 全件の id を集めて比べ、変更の通知先を全件に張り直すので、14.4 万本の街路樹では
+        /// パン中にこれが何度も挟まって操作が重くなっていた。一覧が同じなら、張ってある
+        /// 通知先もそのまま有効なので、何もしなくてよい。
+        private var markerListIdentity = MarkerListIdentity()
         private var infoBubbleCoordinator: InfoBubbleOverlayCoordinator?
 
         func bind(state: OpenMobileMapsViewState, surface: OpenMobileMapsMapSurface) {
@@ -262,9 +287,16 @@ private struct OpenMobileMapsMapViewRepresentable: UIViewRepresentable {
         func updateContent(_ content: MapViewContent) {
             infoBubbleCoordinator?.syncInfoBubbles(content.infoBubbles)
             controller?.markerController.tilingOptions = content.markerTilingOptions
-            overlayScope?.markerCollector.sync(content.markers.map(\.state))
+            if markerListIdentity.shouldProcess(content.markers) {
+                overlayScope?.markerCollector.sync(content.markers.map(\.state))
+            }
             overlayScope?.polylineCollector.sync(content.polylines.map(\.state))
             overlayScope?.polygonCollector.sync(content.polygons.map(\.state))
+            controller?.polygonController.tiler?.refreshIfServerMoved()
+            if controller?.polylineController.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+            if controller?.circleController.tiler?.setOptions(content.circleTilingOptions) == true { overlayScope?.circleCollector.flush() }
+            controller?.polylineController.tiler?.refreshIfServerMoved()
+            controller?.circleController.tiler?.refreshIfServerMoved()
             overlayScope?.circleCollector.sync(content.circles.map(\.state))
             overlayScope?.groundImageCollector.sync(content.groundImages.map(\.state))
             overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map(\.state))
